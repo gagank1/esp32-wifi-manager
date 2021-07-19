@@ -940,6 +940,8 @@ void wifi_manager( void * pvParameters ){
 		ap_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
 		memcpy(ap_config.ap.password, wifi_settings.ap_pwd, sizeof(wifi_settings.ap_pwd));
 	}
+
+	// TODO: ADD WPA2 ENTERPRISE AUTHMODE HERE
 	
 
 	/* DHCP AP configuration */
@@ -1016,8 +1018,23 @@ void wifi_manager( void * pvParameters ){
 				/* if a scan is already in progress this message is simply ignored thanks to the WIFI_MANAGER_SCAN_BIT uxBit */
 				uxBits = xEventGroupGetBits(wifi_manager_event_group);
 				if(! (uxBits & WIFI_MANAGER_SCAN_BIT) ){
+					/* BUGFIX
 					xEventGroupSetBits(wifi_manager_event_group, WIFI_MANAGER_SCAN_BIT);
 					ESP_ERROR_CHECK(esp_wifi_scan_start(&scan_config, false));
+					*/
+					if (! (uxBits & ( WIFI_MANAGER_REQUEST_STA_CONNECT_BIT | WIFI_MANAGER_REQUEST_RESTORE_STA_BIT) ) ) {
+						esp_err_t res = esp_wifi_scan_start(&scan_config, false);
+						if (res==ESP_ERR_WIFI_STATE || res==ESP_FAIL) { // added res==ESP_FAIL condition to TEST
+							// This might happen when connect retry is attempted while AP scan starts.. Just ignore it
+							ESP_LOGE(TAG,"Wifi still in connect mode whan starting scan!");
+						} else {
+							// handle other errors
+							ESP_ERROR_CHECK(res);
+							xEventGroupSetBits(wifi_manager_event_group, WIFI_MANAGER_SCAN_BIT);
+						}
+					} else {
+						// Cannot scan while connecting to AP
+					}
 				}
 
 				/* callback */
@@ -1066,6 +1083,7 @@ void wifi_manager( void * pvParameters ){
 					if(uxBits & WIFI_MANAGER_SCAN_BIT){
 						esp_wifi_scan_stop();
 					}
+					ESP_LOGI(TAG, "WIFI SCAN STOPPED, ABOUT TO CONNECT"); // debugging
 					ESP_ERROR_CHECK(esp_wifi_connect());
 				}
 
@@ -1234,7 +1252,11 @@ void wifi_manager( void * pvParameters ){
 				/* before stopping the AP, we check that we are still connected. There's a chance that once the timer
 				 * kicks in, for whatever reason the esp32 is already disconnected.
 				 */
-				if(uxBits & WIFI_MANAGER_WIFI_CONNECTED_BIT){
+
+				if (!(uxBits & WIFI_MANAGER_AP_STARTED_BIT)) {
+					//just make the callback, since the AP is already stopped
+					if(cb_ptr_arr[msg.code]) (*cb_ptr_arr[msg.code])(NULL);
+				} else if(uxBits & WIFI_MANAGER_WIFI_CONNECTED_BIT){ // added &WIFI_MANAGER_AP_STARTED_BIT because we're sending this message from main.c as well, and there's no precheck.
 
 					/* set to STA only */
 					esp_wifi_set_mode(WIFI_MODE_STA);
